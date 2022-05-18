@@ -1,0 +1,183 @@
+---
+title: "Proyecto Virus Total"
+author: "Francisco Jose Garcia Barbero"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+# Proyecto de análisis de datos sobre los JSON de virus total.
+
+## Cargamos las librerias que vamos a usar durante el proyecto:
+```{r include=FALSE}
+library(jsonlite)
+library(curl)
+library(tidyjson)
+library(dplyr)
+library(purrr)
+library(tidyverse)
+library(jsonlite)
+library(rjson)
+library(fcaR)
+library(parallel)
+library(purrr)
+library(rlist)
+library(devtools)
+library(rbenchmark)
+library(microbenchmark)
+library(kableExtra)
+library(factoextra)
+library(cluster)
+library(fpc)
+library(hasseDiagram)
+library(arules)
+library(tree)
+library(ISLR)
+library(caTools)
+library(caret)
+library(rpart)
+library(rpart.plot)
+library(plotly)
+library(dash)
+library(dashCoreComponents)
+library(dashHtmlComponents)
+```
+
+## Ruta de trabajo
+
+```{r}
+path <- "~/clase/proyecto r/ProyectoVirusTotal/Android"
+```
+
+## Operación de carga de datos y transformación a Dataset
+Guardamos todos los JSON en un array de characters, y los cargamos mediante un cluster donde vamos a paralelizar la lectura de los JSON, puesto que de esta es la forma más eficiente, pruebas de rendimiento en el anexo, y una vez cargados todos los json en una lista, los vamos a transformar en una tabla con la que podremos manejarla para crear los datasets. Usaremos simplifyVector con el read_json ya que nos generará un archivo de menor tamaño y por tanto usaremos menos memoria y el spread_all consumirá menos tiempo para crear el dataset que a su vez también ocupará menos.
+
+```{r}
+files <- dir(path, pattern = "*.json")
+cl <- makeCluster(detectCores() -1 )
+json_files<-list.files(path =path,pattern="*.json",full.names = TRUE)
+## Pruebas en diferencias de tiempo entre paralelizado y usando lapply normal,
+json_list<-parLapply(cl,json_files,function(x) jsonlite::read_json(path = x , simplifyVector = TRUE))
+stopCluster(cl)
+json_tabla <- json_list %>%
+  spread_all()
+
+json_tabla
+```
+
+## Filtrado de columnas previo
+
+Dado que ya hemos cargado los datos y sabemos con que columnas queremos trabajar, podemos filtrarlas desde el la lista de todos los json en vez de crear el dataset y luego filtrarlas, esto nos permite crear un nuevo listado que ocupará la mitad de almacenamiento y es apróximadamente un 30% más rápido en ejecutarse incluso con esta muestra reducida de 183 objectos, haciéndolo mucho más eficiente que la opción de crear un dataset y realizarle un select para hacer la selección. 
+
+``` {r}
+
+json_list_filtrados <- lapply(json_list, `[`, c('sha256',"total", "positives",'scans'))
+
+json_tabla_filtrado <- json_list_filtrados %>%
+  spread_all()
+
+```
+
+
+## Selección de columnas
+Vamos a usar sha256 como el identificador de cada posible archivo y extraeremos también el número de positivos y lo que ha detectado cada antivirus el problema con ese resultado es que no podemos asegurar que no tenga NA, así que hay que filtrarlo posteriormente.
+
+```{r}
+sha_datos_scans.detected <- as.data.frame(json_tabla_filtrado) %>% select( sha256, total, positives , matches("scans.*.detected"))
+## Los datos numéricos únicamente para evitar dolores de cabeza.
+datos_scans.detected <- as.data.frame(json_tabla_filtrado) %>% select(  matches("scans.*.detected") )
+## Nos sirve para pasar los true y false a 1 o 0.
+datos_procesados <- data.frame(datos_scans.detected*1)
+
+``` 
+
+## Filtrado de datos
+Se crea un tabla para poder contar el número de NA que tenemos en la detección de los antivirus, posteriormente los ordenamos de mayor a menor y extraemos el nombre de las filas extrayendo la parte .NA del archivo, lo que nos servirá para ir filtrando en el siguiente bucle.
+
+```{r}
+tabla_total <- sapply(datos_procesados, table, useNA="always" )
+tabla_df_total <- data.frame(t(unlist(tabla_total)))
+tabla_NAs <- as.data.frame(t(select(tabla_df_total , matches( "*.NA$"))))
+tabla_NAs <- arrange(tabla_NAs, desc(V1) )
+nombres_eliminar<- gsub( ".{3}$", "", row.names(tabla_NAs))
+```
+
+Cargamos la tabla con los sha y los antivirus y le realizamos un reemplazo de los - por . para que estén en el mismo formato que nombres_eliminar, y posteriormente creamos un bucle que nos servirá para ir eliminando filas y columnas que tengan resultados NA hasta quedarnos con mínimo un 90% de filas respecto de la muestra inicial, finalmente eliminamos las filas con NA de nuestro dataframe, donde sacaremos nuestra nueva tabla con los resultados de los antivirus esta vez sin ningún NA, y nos guardamos un dataframe con la cantidad de resultados positivos de cada antivirus para posterior comprobaciones con los modelos que obtendremos.
+
+```{r}
+json_df_filtrados<-sha_datos_scans.detected
+colnames(json_df_filtrados)<-gsub("-" , ".", colnames(json_df_filtrados))
+json_df_filtrados<-as.data.frame(json_df_filtrados)
+i<-1
+total_filas<-0
+total<-nrow(sha_datos_scans.detected)
+while (total_filas < total*0.9) {
+  mayor<- nombres_eliminar[i]
+  json_df_filtrados <- select(json_df_filtrados, -mayor)
+  total_filas <- nrow (na.omit(json_df_filtrados))
+  i<-i+1
+}
+
+json_df_filtrados<- na.omit(json_df_filtrados)
+datos_df_filtrados <- as.data.frame(select(json_df_filtrados, -c("sha256","total","positives")))
+tabla <- sapply(datos_df_filtrados , table)
+tabla_df <- data.frame(t(unlist(tabla)))
+tabla_unos <- as.data.frame(t(select(tabla_df , matches( "*.TRUE$"))))
+```
+
+## Kmeans
+
+
+```{r}
+fviz_nbclust(t(json_df_filtrados[,4:45]), kmeans, nstart= 100  ) 
+test_kmeans <- kmeans(t(json_df_filtrados[,4:45]), centers = 5, nstar=100)
+
+test <- fviz_cluster(test_kmeans, data = t(json_df_filtrados[,4:45]) , geom=c("point", "text") )
+
+ggplotly(test)
+
+plotcluster(t(json_df_filtrados[,4:45]), test_kmeans$cluster)
+
+
+
+plot(t(json_df_filtrados[,4:45]),col=test_kmeans$cluster) 
+points(test_kmeans$center,col=1:10,pch=8,cex=1)            
+```
+
+## Ahora probamos a realizarle un análisis usando un dendograma y luego lo agruparemos en 5 clústers para comprobar si se corresponden con el resultado de kmeans.
+
+```{r}
+distancias <- dist(t(datos_df_filtrados))
+distancias %>% fviz_dist()
+clusters <- distancias %>% hclust()
+plot(clusters, main="Detectado Antivirus" )
+rect.hclust(clusters, k=5 )
+
+```
+
+## Formal Concepts Analysis
+El primer método de análisis de datos que voy a aplicar es FCA
+
+```{r}
+objects <- json_df_filtrados$sha256
+datos_df_filtrados <- as.data.frame(select(json_df_filtrados, -sha256, -total, -positives))
+class(datos_df_filtrados$scans.Bkav.detected[1])
+datos_df_filtrados <- datos_df_filtrados*1
+json_df_filtrados<- cbind(json_df_filtrados[,1:3], datos_df_filtrados)
+
+## Usamos el análisis con fcaR para buscar posibles reglas entre los antivirus.
+fc_detected <- FormalContext$new(datos_df_filtrados)
+fc_detected$clarify()
+fc_detected$reduce()
+plot(fc_detected)
+fc_detected$concepts$plot()
+b <- fc_detected$concepts[1:200]
+implicaciones <-  fc_detected$implications$support()
+implicaciones
+```
+
+
+
+
+
+tengo que buscar caracterizadores de los archivos para poder hacer un modelo de predicción.tengo que buscar caracterizadores de los archivos para poder hacer un modelo de predicción.
+
