@@ -42,12 +42,13 @@ library(dashCoreComponents)
 library(dashHtmlComponents)
 library(ggfortify)
 library(ggdendro)
+library(heatmaply)
 ```
 
 ## Ruta de trabajo
 
 ```{r}
-path <- "~/clase/proyecto r/ProyectoVirusTotal/Android"
+path <- "~/proyecto r/proyecto r/Android"
 ```
 
 ## Operación de carga de datos y transformación a Dataset
@@ -57,7 +58,7 @@ Guardamos todos los JSON en un array de characters, y los cargamos mediante un c
 files <- dir(path, pattern = "*.json")
 cl <- makeCluster(detectCores() -1 )
 json_files<-list.files(path =path,pattern="*.json",full.names = TRUE)
-## Pruebas en diferencias de tiempo entre paralelizado y usando lapply normal,
+
 json_list<-parLapply(cl,json_files,function(x) jsonlite::read_json(path = x , simplifyVector = TRUE))
 stopCluster(cl)
 json_tabla <- json_list %>%
@@ -120,6 +121,8 @@ while (total_filas < total*0.9) {
 }
 
 json_df_filtrados<- na.omit(json_df_filtrados)
+colnames(json_df_filtrados) <- gsub("scans.","",colnames(json_df_filtrados))
+colnames(json_df_filtrados) <- gsub(".detected","",colnames(json_df_filtrados))
 datos_df_filtrados <- as.data.frame(select(json_df_filtrados, -c("sha256","total","positives")))
 tabla <- sapply(datos_df_filtrados , table)
 tabla_df <- data.frame(t(unlist(tabla)))
@@ -129,7 +132,7 @@ tabla_unos <- as.data.frame(t(select(tabla_df , matches( "*.TRUE$"))))
 ## Kmeans
 Haciendo el nbclust nos sale que el valor óptimo de clúster es 2, sin embargo he optado por hacer 5 clústers ya que cuando hacía la visualización quedan mejor agrupados los valores. El resultado se visualiza mediante un gráfico interactivo donde puedes ver el valor de cada nodo con el antivirus al que corresponde.
 
-```{r}
+```{r echo=TRUE, warning=FALSE}
 fviz_nbclust(t(json_df_filtrados[,4:45]), kmeans, nstart= 100  ) 
 test_kmeans <- kmeans(t(json_df_filtrados[,4:45]), centers = 5, nstar=100)
 grafico_kmeans<- fviz_cluster(test_kmeans, data = t(json_df_filtrados[,4:45]) , geom=c("point", "text"))+ geom_point(aes(color=cluster, text = name))
@@ -152,13 +155,26 @@ rect.hclust(clusters, k=5 )
 dendograma <- ggdendrogram(clusters, rotate = FALSE)
 ggplotly(dendograma)
 ```
+## Funciones para visualización de fcaR
+La función plot_interactivo nos devolverá un objeto plot_ly donde estará nuestra representación gráfica del fcaR.
+En la función plot_dendograma, dibujará el mapa de calor donde las columnas y las filas estarán ordenadas en función del resultado del dendograma, se le puede pasa opciones de la función heatmap.
+FALTA HEATMAPLY
 
+```{r}
+plot_interactivo <- function(fca){
+  matriz_descompuesta <- as.matrix(t(fca[["I"]]))
+  plot_interactivo <- plot_ly(z=matriz_descompuesta, data=as.data.frame(matriz_descompuesta), type = "heatmap", colors = "Greys", x=colnames(matriz_descompuesta), y=rownames(matriz_descompuesta))%>% layout(xaxis = list(autotypenumbers ='strict', type='category'), yaxis = list(autotypenumbers ='strict', dtick=1 ))
+  return(plot_interactivo)
+}
+plot_dendograma <- function(fca){
+  matriz_descompuesta <- as.matrix(t(fca[["I"]]))
+  heatmap(matriz_descompuesta, col=c("Black","white"))
+}
+```
 ## Formal Concepts Analysis
 A continuación voy a aplicar es FCA
 
 ```{r}
-objects <- json_df_filtrados$sha256
-datos_df_filtrados <- as.data.frame(select(json_df_filtrados, -sha256, -total, -positives))
 datos_df_filtrados <- datos_df_filtrados*1
 atributes <- colnames(datos_df_filtrados)
 json_df_filtrados<- cbind(json_df_filtrados[,1:3], datos_df_filtrados)
@@ -167,8 +183,20 @@ fc_detected <- FormalContext$new(datos_df_filtrados)
 fc_detected$clarify()
 fc_detected$reduce()
 fc_detected$plot()
-fc_detected$concepts$plot()
+fc_detected$find_concepts()
+
+mapa_calor <- plot_interactivo(fc_detected)
+mapa_calor
+
+plot_dendograma(fc_detected )
 
 ```
 
 En el siguiente cuaderno realizaremos la predicción de los posibles positivos que darían en función de los permisos que teng el archivo.
+
+
+# https://www.r-bloggers.com/2020/03/what-is-a-dgcmatrix-object-made-of-sparse-matrix-format-in-r/
+# https://cran.r-project.org/web/packages/heatmaply/vignettes/heatmaply.html
+# https://plotly.com/r/axes/
+# https://statisticsglobe.com/heatmap-in-r
+# https://www.displayr.com/what-is-dendrogram/
