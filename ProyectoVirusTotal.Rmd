@@ -40,6 +40,8 @@ library(plotly)
 library(dash)
 library(dashCoreComponents)
 library(dashHtmlComponents)
+library(ggfortify)
+library(ggdendro)
 ```
 
 ## Ruta de trabajo
@@ -125,25 +127,21 @@ tabla_unos <- as.data.frame(t(select(tabla_df , matches( "*.TRUE$"))))
 ```
 
 ## Kmeans
-
+Haciendo el nbclust nos sale que el valor óptimo de clúster es 2, sin embargo he optado por hacer 5 clústers ya que cuando hacía la visualización quedan mejor agrupados los valores. El resultado se visualiza mediante un gráfico interactivo donde puedes ver el valor de cada nodo con el antivirus al que corresponde.
 
 ```{r}
 fviz_nbclust(t(json_df_filtrados[,4:45]), kmeans, nstart= 100  ) 
 test_kmeans <- kmeans(t(json_df_filtrados[,4:45]), centers = 5, nstar=100)
+grafico_kmeans<- fviz_cluster(test_kmeans, data = t(json_df_filtrados[,4:45]) , geom=c("point", "text"))+ geom_point(aes(color=cluster, text = name))
+grafico_kmeans$layers[[4]] <- NULL
+grafico_kmeans$layers[[3]] <- NULL
+grafico_kmeans$layers[[1]] <- NULL
+ggplotly(grafico_kmeans)
 
-test <- fviz_cluster(test_kmeans, data = t(json_df_filtrados[,4:45]) , geom=c("point", "text") )
-
-ggplotly(test)
-
-plotcluster(t(json_df_filtrados[,4:45]), test_kmeans$cluster)
-
-
-
-plot(t(json_df_filtrados[,4:45]),col=test_kmeans$cluster) 
-points(test_kmeans$center,col=1:10,pch=8,cex=1)            
 ```
 
-## Ahora probamos a realizarle un análisis usando un dendograma y luego lo agruparemos en 5 clústers para comprobar si se corresponden con el resultado de kmeans.
+## Dendograma
+Ahora probamos a realizarle un análisis usando un dendograma y luego lo agruparemos en 5 clústers para comprobar si se corresponden con el resultado de kmeans.
 
 ```{r}
 distancias <- dist(t(datos_df_filtrados))
@@ -151,33 +149,26 @@ distancias %>% fviz_dist()
 clusters <- distancias %>% hclust()
 plot(clusters, main="Detectado Antivirus" )
 rect.hclust(clusters, k=5 )
-
+dendograma <- ggdendrogram(clusters, rotate = FALSE)
+ggplotly(dendograma)
 ```
 
 ## Formal Concepts Analysis
-El primer método de análisis de datos que voy a aplicar es FCA
+A continuación voy a aplicar es FCA
 
 ```{r}
 objects <- json_df_filtrados$sha256
 datos_df_filtrados <- as.data.frame(select(json_df_filtrados, -sha256, -total, -positives))
-class(datos_df_filtrados$scans.Bkav.detected[1])
 datos_df_filtrados <- datos_df_filtrados*1
+atributes <- colnames(datos_df_filtrados)
 json_df_filtrados<- cbind(json_df_filtrados[,1:3], datos_df_filtrados)
 
-## Usamos el análisis con fcaR para buscar posibles reglas entre los antivirus.
 fc_detected <- FormalContext$new(datos_df_filtrados)
 fc_detected$clarify()
 fc_detected$reduce()
-plot(fc_detected)
+fc_detected$plot()
 fc_detected$concepts$plot()
-b <- fc_detected$concepts[1:200]
-implicaciones <-  fc_detected$implications$support()
-implicaciones
+
 ```
 
-
-
-
-
-tengo que buscar caracterizadores de los archivos para poder hacer un modelo de predicción.tengo que buscar caracterizadores de los archivos para poder hacer un modelo de predicción.
-
+En el siguiente cuaderno realizaremos la predicción de los posibles positivos que darían en función de los permisos que teng el archivo.
