@@ -1,0 +1,182 @@
+---
+title: "Prediccion positivos con permisos"
+author: "Francisco José García Barbero"
+date: '2022-05-19'
+output: html_document
+---
+library(devtools)
+library(rbenchmark)
+library(microbenchmark)
+```{r include=FALSE}
+library(jsonlite)
+library(curl)
+library(tidyjson)
+library(dplyr)
+library(purrr)
+library(tidyverse)
+library(jsonlite)
+library(rjson)
+library(cluster)
+library(arules)
+library(tree)
+library(rpart)
+library(rpart.plot)
+library(caTools)
+library(caret)
+library(parallel)
+library(kableExtra)
+library(factoextra)
+library(fpc)
+library(reshape2)
+library(FactoMineR)
+library(MASS)
+```
+
+## Ruta de trabajo
+
+```{r}
+path <- "~/clase/proyecto r/ProyectoVirusTotal/Android"
+```
+
+## Operación de carga de datos y transformación a Dataset
+Tal y como se ha explicado en el anterior capítulo de clasificación, cargamos los datos en una lista con la información de los json, como vamos a trabajar con los permisos necesitamos que estén presentes en el dataset posterioremente, sin embargo la función de spread_all nos pone a null los elementos que son múltiples, en este caso los permisos se componen de 3 elementos, por eso los tenemos que corregir antes de pasarlos a dataset, una vez hecho eso, volvemos a usar spread_all para tenerlos en dataframe.
+```{r}
+files <- dir(path, pattern = "*.json")
+cl <- makeCluster(detectCores() -1 )
+json_files<-list.files(path =path,pattern="*.json",full.names = TRUE)
+
+
+
+
+json_list<-parLapply(cl,json_files,function(x) jsonlite::read_json(path = x , simplifyVector = TRUE))
+
+for (j in 1:length(json_list)) {
+  if(length(json_list[[j]][["additional_info"]][["androguard"]][["Permissions"]]) >0){
+    for (k in 1:length(json_list[[j]][["additional_info"]][["androguard"]][["Permissions"]])){
+      json_list[[j]][["additional_info"]][["androguard"]][["Permissions"]][[k]] <- TRUE
+    }
+  }
+}
+
+stopCluster(cl)
+json_tabla_permisos_cambiados <- json_list %>%
+  spread_all()
+
+```
+## Filtrado de columnas previo
+
+Filtramos las columnas de sha256 que es lo que usaremos para identificar a cada archivo, aunque por comodidad de ver los gráficos posteriores seguiremos con cada archivo identificado por su posición en las visualizacioes, posteriormente seleccionamos todos los permisos y le asignamos 0 a todos los NA, ya que en este caso tener un NA implica que no tiene ese permiso.
+```{r}
+sha_datos_permisos_positives <- as.data.frame(json_tabla_permisos_cambiados) %>% select( sha256, total, positives , matches("androguard.Permissions.android.permission.*") )
+sha_datos_permisos_positives[is.na(sha_datos_permisos_positives)] <- 0
+```
+
+## Regresión Lineal
+Primero probamos con una regresión lineal, con la que obtenemos 0.6469 de r-squared, sin embargo tenemos demasiadas variables en la regresión lineal, las vamos a filtrar usando stepAICm así pasamos de 96 permisos a 23 permisos que son los más relevantes de cara a que den positivos los test.
+
+```{r}
+permisos.regresion <- lm(formula = positives  ~ . -total-sha256,  data = sha_datos_permisos_positives )
+plot(permisos.regresion)
+summary(permisos.regresion)
+
+permisos.regresion_filtrados <- stepAIC(permisos.regresion, direction="both")
+permisos.regresion_filtrados$anova # display results
+anova(permisos.regresion,permisos.regresion_filtrados)
+summary(step)
+```
+
+## Reglas de asociación
+En un dataset como éste donde queremos predecir si será positivo en función de los permisos la mejor opción sería aplicar reglas de asociación, pero es que no tengo suficiente memoria ram en el ordenador ni siquiera con minlen=2 y support=0.8 me sigue fallando.
+```{r}
+test_apriori <- apriori(sha_datos_permisos_positives, minlen=2, support=0.8)
+```
+## Funciones de visualizacion fcaR
+```{r}
+plot_interactivo <- function(fca){
+  matriz_descompuesta <- as.matrix(t(fca[["I"]]))
+  plot_interactivo <- plot_ly(z=matriz_descompuesta, data=as.data.frame(matriz_descompuesta), type = "heatmap", colors = "Greys", x=colnames(matriz_descompuesta), y=rownames(matriz_descompuesta))%>% layout(xaxis = list(autotypenumbers ='strict', type='category'), yaxis = list(autotypenumbers ='strict', dtick=1 ))
+  return(plot_interactivo)
+}
+plot_dendograma <- function(fca){
+  matriz_descompuesta <- as.matrix(t(fca[["I"]]))
+  heatmap(matriz_descompuesta, col=c("White","Black"))
+}
+plot_dendograma_interactico <- function(fca){
+  matriz_descompuesta <- as.matrix(t(fca[["I"]]))
+  heatmaply(matriz_descompuesta, col=c("White","Black"))
+}
+```
+
+## Formal Concepts Analysis
+Finalmente hacemos un fca para ver como se agrupan los permisos por si algunos más comunes que otros. Hay 46 grupos de permisos que son irreduciblesx y 31 grupos de archivos distintos.
+```{r}
+fc_permisos <- FormalContext$new(sha_datos_permisos_positives[,4:99])
+fc_permisos$clarify()
+fc_permisos$reduce()
+fc_permisos$find_concepts()
+fc_permisos$find_implications()
+fc_permisos$standardize()
+fc_permisos$concepts$plot()
+mapa_calor <- plot_interactivo(fc_detected)
+mapa_calor
+
+plot_dendograma(fc_permisos )
+```
+
+
+## Arbol de decisión
+Ahora realizamos un árbol de decisión con un porcentaje del 80% de los datos para entrenamiento y 20% para prueba.
+
+```{r}
+sha_datos_permisos_positives.split <- sample.split(sha_datos_permisos_positives, SplitRatio = 0.8 )
+sha_datos_permisos_positives.train <- subset(sha_datos_permisos_positives, sha_datos_permisos_positives.split == TRUE)
+sha_datos_permisos_positives.test_train <- subset(sha_datos_permisos_positives, sha_datos_permisos_positives.split == FALSE)
+
+permisos.tree <- tree(positives  ~ . -total -sha256,  data = sha_datos_permisos_positives.train )
+plot(permisos.tree)
+text(permisos.tree , pretty = 0)
+permisos.predecir = predict(permisos.tree, sha_datos_permisos_positives.test_train )
+permisos.cv <- cv.tree(permisos.tree)
+permisos.cv
+plot(permisos.cv)
+
+permisos.rpart.class <- rpart(positives  ~ . -total -sha256,  data = sha_datos_permisos_positives.train, method = 'class')
+permisos.rpart.anova <- rpart(positives  ~ . -total -sha256,  data = sha_datos_permisos_positives.train, method = 'anova')
+rpart.plot(permisos.rpart.class, extra = 100)
+rpart.plot(permisos.rpart.anova, extra = 100)
+```
+## Análisis de factores
+Realizo un análisis de factores para intentar ver si con pocos factores se puede explicar el dataframe y trabajar con ellos para una visualización, sin embargo para obtener un 90% hacen falta 20 factores y con 2 sólo explicas un 50% de la varianza.
+```{r}
+
+pr_permisos <- PCA(sha_datos_permisos_positives[,4:99], scale.unit = FALSE, ncp = 95, graph = TRUE)
+get_pca(pr_permisos)
+get_pca_var(pr_permisos)
+get_pca_ind(pr_permisos)
+
+
+fviz_eig(pr_permisos)
+fviz_screeplot(pr_permisos)
+ggplotly(fviz_contrib(pr_permisos, choice = "var"))
+
+```
+
+
+
+
+
+
+
+
+#Bibliografía
+ https://www.alexejgossmann.com/benchmarking_r/
+
+ https://cran.r-project.org/web/packages/microbenchmark/microbenchmark.pdf
+
+ https://rpubs.com/rdelgado/405322
+ https://techvidvan.com/tutorials/decision-tree-in-r/#:~:text=Decision%20trees%20are%20a%20graphical,as%20well%20as%20classification%20problems.
+ https://www.guru99.com/r-decision-trees.html
+ https://plotly.com/r/ml-regression/
+ https://www.statmethods.net/stats/regression.html
+ 
+ 
