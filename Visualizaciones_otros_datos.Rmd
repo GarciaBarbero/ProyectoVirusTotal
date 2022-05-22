@@ -6,6 +6,7 @@ output: html_document
 ---
 
 ## Cargamos las librerias que vamos a usar durante el proyecto:
+
 ```{r include=FALSE}
 library(jsonlite)
 library(curl)

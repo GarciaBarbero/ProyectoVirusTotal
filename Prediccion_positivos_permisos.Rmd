@@ -30,6 +30,8 @@ library(fpc)
 library(reshape2)
 library(FactoMineR)
 library(MASS)
+library(fcaR)
+library(plotly)
 ```
 
 ## Ruta de trabajo
@@ -67,8 +69,10 @@ json_tabla_permisos_cambiados <- json_list %>%
 
 Filtramos las columnas de sha256 que es lo que usaremos para identificar a cada archivo, aunque por comodidad de ver los gráficos posteriores seguiremos con cada archivo identificado por su posición en las visualizacioes, posteriormente seleccionamos todos los permisos y le asignamos 0 a todos los NA, ya que en este caso tener un NA implica que no tiene ese permiso.
 ```{r}
-sha_datos_permisos_positives <- as.data.frame(json_tabla_permisos_cambiados) %>% select( sha256, total, positives , matches("androguard.Permissions.android.permission.*") )
+sha_datos_permisos_positives <- as.data.frame(json_tabla_permisos_cambiados) %>% plotly::select( sha256, total, positives , matches("androguard.Permissions.android.permission.*") )
 sha_datos_permisos_positives[is.na(sha_datos_permisos_positives)] <- 0
+
+colnames(sha_datos_permisos_positives) <- gsub("additional_info.androguard.Permissions.android.permission.","",colnames(sha_datos_permisos_positives))
 ```
 
 ## Regresión Lineal
@@ -78,16 +82,21 @@ Primero probamos con una regresión lineal, con la que obtenemos 0.6469 de r-squ
 permisos.regresion <- lm(formula = positives  ~ . -total-sha256,  data = sha_datos_permisos_positives )
 plot(permisos.regresion)
 summary(permisos.regresion)
-
+```
+Ejecuto esta función por separado para poder evitar mostrar la salida
+```{r message=TRUE, warning=FALSE, echo=TRUE, results='hide'}
 permisos.regresion_filtrados <- stepAIC(permisos.regresion, direction="both")
-permisos.regresion_filtrados$anova # display results
+```
+
+```{r}
+permisos.regresion_filtrados$anova 
 anova(permisos.regresion,permisos.regresion_filtrados)
-summary(step)
+summary(permisos.regresion_filtrados)
 ```
 
 ## Reglas de asociación
-En un dataset como éste donde queremos predecir si será positivo en función de los permisos la mejor opción sería aplicar reglas de asociación, pero es que no tengo suficiente memoria ram en el ordenador ni siquiera con minlen=2 y support=0.8 me sigue fallando.
-```{r}
+En un dataset como éste donde queremos predecir si será positivo en función de los permisos la mejor opción sería aplicar reglas de asociación, pero es que no tengo suficiente memoria ram en el ordenador ni siquiera con minlen=2 y support=0.8 me sigue fallando. 
+```{r eval=FALSE, echo=TRUE}
 test_apriori <- apriori(sha_datos_permisos_positives, minlen=2, support=0.8)
 ```
 ## Funciones de visualizacion fcaR
@@ -117,7 +126,7 @@ fc_permisos$find_concepts()
 fc_permisos$find_implications()
 fc_permisos$standardize()
 fc_permisos$concepts$plot()
-mapa_calor <- plot_interactivo(fc_detected)
+mapa_calor <- plot_interactivo(fc_permisos)
 mapa_calor
 
 plot_dendograma(fc_permisos )
