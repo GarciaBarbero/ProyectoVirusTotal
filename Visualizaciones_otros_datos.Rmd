@@ -1,0 +1,62 @@
+---
+title: "Visualizaciones de otros datos."
+author: "Francisco José García Barbero"
+date: '2022-05-22'
+output: html_document
+---
+
+## Cargamos las librerias que vamos a usar durante el proyecto:
+```{r include=FALSE}
+library(jsonlite)
+library(curl)
+library(tidyjson)
+library(dplyr)
+library(purrr)
+library(tidyverse)
+library(jsonlite)
+library(rjson)
+library(fcaR)
+library(parallel)
+library(rlist)
+library(kableExtra)
+library(factoextra)
+library(fpc)
+library(hasseDiagram)
+library(plotly)
+library(dash)
+library(dashCoreComponents)
+library(dashHtmlComponents)
+library(ggfortify)
+library(ggdendro)
+library(heatmaply)
+
+```
+
+## Ruta de trabajo
+
+```{r}
+path <- "~/clase/proyecto r/ProyectoVirusTotal/Android"
+```
+
+## Operación de carga de datos
+
+```{r}
+files <- dir(path, pattern = "*.json")
+cl <- makeCluster(detectCores() -1 )
+json_files<-list.files(path =path,pattern="*.json",full.names = TRUE)
+
+json_list<-parLapply(cl,json_files,function(x) jsonlite::read_json(path = x , simplifyVector = TRUE))
+stopCluster(cl)
+json_tabla <- json_list %>%
+  spread_all()
+```
+## Paises donde se suben ficheros.
+
+```{r}
+countries <-  as.data.frame(json_tabla) %>% group_by(submission.submitter_country)
+countries_sel <- countries%>%plotly::select(positives, submission.submitter_country)
+
+countries_paises <- as.data.frame(table(countries_sel))%>% group_by(submission.submitter_country)
+countries_positives_circulos<-ggplot(data = countries_paises , aes(y = positives , x = submission.submitter_country , size = Freq , color = submission.submitter_country)) +  geom_point(alpha=0.3) + scale_size(range = c(.1, 18), name="Frecuencia")
+ggplotly(countries_positives_circulos)
+```
