@@ -1,10 +1,10 @@
 ---
 title: "Proyecto Virus Total"
 author: "Francisco Jose Garcia Barbero"
-date: "`r Sys.Date()`"
+date: '2022-05-19'
 output: html_document
 ---
-
+ 
 # Proyecto de análisis de datos sobre los JSON de virus total.
 
 ## Cargamos las librerias que vamos a usar durante el proyecto:
@@ -19,23 +19,11 @@ library(jsonlite)
 library(rjson)
 library(fcaR)
 library(parallel)
-library(purrr)
 library(rlist)
-library(devtools)
-library(rbenchmark)
-library(microbenchmark)
 library(kableExtra)
 library(factoextra)
-library(cluster)
 library(fpc)
 library(hasseDiagram)
-library(arules)
-library(tree)
-library(ISLR)
-library(caTools)
-library(caret)
-library(rpart)
-library(rpart.plot)
 library(plotly)
 library(dash)
 library(dashCoreComponents)
@@ -43,6 +31,7 @@ library(dashHtmlComponents)
 library(ggfortify)
 library(ggdendro)
 library(heatmaply)
+
 ```
 
 ## Ruta de trabajo
@@ -51,8 +40,8 @@ library(heatmaply)
 path <- "~/clase/proyecto r/ProyectoVirusTotal/Android"
 ```
 
-## Operación de carga de datos y transformación a Dataset
-Guardamos todos los JSON en un array de characters, y los cargamos mediante un cluster donde vamos a paralelizar la lectura de los JSON, puesto que de esta es la forma más eficiente, pruebas de rendimiento en el anexo, y una vez cargados todos los json en una lista, los vamos a transformar en una tabla con la que podremos manejarla para crear los datasets. Usaremos simplifyVector con el read_json ya que nos generará un archivo de menor tamaño y por tanto usaremos menos memoria y el spread_all consumirá menos tiempo para crear el dataset que a su vez también ocupará menos.
+## Operación de carga de datos
+Guardamos todos los JSON en un array de characters, y los cargamos mediante un cluster donde vamos a paralelizar la lectura de los JSON, puesto que de esta es la forma más eficiente, pruebas de rendimiento en el anexo. Usaremos simplifyVector con el read_json ya que nos generará un archivo de menor tamaño y por tanto usaremos menos memoria y el spread_all consumirá menos tiempo para crear el dataset que a su vez también ocupará menos.
 
 ```{r}
 files <- dir(path, pattern = "*.json")
@@ -61,14 +50,19 @@ json_files<-list.files(path =path,pattern="*.json",full.names = TRUE)
 
 json_list<-parLapply(cl,json_files,function(x) jsonlite::read_json(path = x , simplifyVector = TRUE))
 stopCluster(cl)
+```
+
+##  Transformación a dataset para primera exploración
+Una vez cargados todos los json en una lista, los vamos a transformar en una tabla con la que podremos manejarla para crear los datasets, y posteriormente filtramos todas las columnas que sean NA, una vez hecho esto decidimos que la primero que queremos hacer es un clasificador de antivirus, mediante cluster con kmeans, dendograma y fcaR.
+```{r eval=FALSE, echo=TRUE}
 json_tabla <- json_list %>%
   spread_all()
-
+json_tabla_no_na <- json_tabla %>% select_if(~!all(is.na(.)))
 ```
 
 ## Filtrado de columnas previo
 
-Dado que ya hemos cargado los datos y sabemos con que columnas queremos trabajar, podemos filtrarlas desde el la lista de todos los json en vez de crear el dataset y luego filtrarlas, esto nos permite crear un nuevo listado que ocupará la mitad de almacenamiento y es apróximadamente un 30% más rápido en ejecutarse incluso con esta muestra reducida de 183 objectos, haciéndolo mucho más eficiente que la opción de crear un dataset y realizarle un select para hacer la selección. 
+Dado que ya hemos cargado los datos y sabemos con que columnas queremos trabajar, podemos filtrarlas desde la lista de todos los json en vez de crear el dataset y luego filtrarlas, esto nos permite crear un nuevo listado que ocupará la mitad de almacenamiento y es apróximadamente un 30% más rápido en ejecutarse incluso con esta muestra reducida de 183 objectos, haciéndolo mucho más eficiente que la opción de crear un dataset y realizarle un select para hacer la selección. 
 
 ``` {r}
 
@@ -132,7 +126,7 @@ tabla_unos <- as.data.frame(t(select(tabla_df , matches( "*.TRUE$"))))
 Haciendo el nbclust nos sale que el valor óptimo de clúster es 2, sin embargo he optado por hacer 5 clústers ya que cuando hacía la visualización quedan mejor agrupados los valores. El resultado se visualiza mediante un gráfico interactivo donde puedes ver el valor de cada nodo con el antivirus al que corresponde.
 
 ```{r echo=TRUE}
-fviz_nbclust(t(json_df_filtrados[,4:45]), kmeans, nstart= 100  ) 
+fviz_nbclust(t(json_df_filtrados[,4:45]), kmeans, nstart= 10) 
 test_kmeans <- kmeans(t(json_df_filtrados[,4:45]), centers = 5, nstar=100)
 grafico_kmeans<- fviz_cluster(test_kmeans, data = t(json_df_filtrados[,4:45]) , geom=c("point", "text"))+ geom_point(aes(color=cluster, text = name))
 grafico_kmeans$layers[[4]] <- NULL
@@ -152,12 +146,17 @@ clusters <- distancias %>% hclust()
 plot(clusters, main="Detectado Antivirus" )
 rect.hclust(clusters, k=5 )
 dendograma <- ggdendrogram(clusters, rotate = FALSE)
+
+```
+
+Y ahora mostramos el dendograma en versión interactiva.
+```{r}
 ggplotly(dendograma)
 ```
+
 ## Funciones para visualización de fcaR
 La función plot_interactivo nos devolverá un objeto plot_ly donde estará nuestra representación gráfica del fcaR.
 En la función plot_dendograma, dibujará el mapa de calor donde las columnas y las filas estarán ordenadas en función del resultado del dendograma, se le puede pasa opciones de la función heatmap.
-FALTA HEATMAPLY
 
 ```{r}
 plot_interactivo <- function(fca){
@@ -174,8 +173,9 @@ plot_dendograma_interactico <- function(fca){
   heatmaply(matriz_descompuesta, col=c("White","Black"))
 }
 ```
+
 ## Formal Concepts Analysis
-A continuación voy a aplicar es FCA y sacara la representación del plot de fca en un mapa de calor, usando las funciones de plot_interactivo, plot_dendograma y plot_dendograma_interactivo. Obtenemos un total de 24 conceptos irreducibles que serían los grupos de antivirus que hay y 75 implicaciones irreducibles que se corresponderían a los grupos de archivos con resultados distintos.
+A continuación voy a aplicar FCA y sacaré la representación del plot de fca en un mapa de calor, usando las funciones de plot_interactivo, plot_dendograma y plot_dendograma_interactivo. Obtenemos un total de 24 conceptos irreducibles que serían los grupos de antivirus que hay y 75 implicaciones irreducibles que se corresponderían a los grupos de archivos con resultados distintos.
 
 ```{r}
 datos_df_filtrados <- datos_df_filtrados*1
@@ -195,9 +195,6 @@ mapa_calor <- plot_interactivo(fc_detected)
 mapa_calor
 
 plot_dendograma(fc_detected )
-
-matriz_descompuesta <- as.matrix(t(fc_detected[["I"]]))
-
 
 ```
 
